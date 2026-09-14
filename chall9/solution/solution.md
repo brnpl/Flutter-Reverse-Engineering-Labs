@@ -210,12 +210,12 @@ public class RjsnifferPlugin implements FlutterPlugin, MethodCallHandler {
 
 `runprog` performs the root-detection checks. It first creates a `RootBeer` instance and runs either `isRooted()` or `isRootedWithBusyBoxCheck()`, depending on the device brand. It then performs several additional checks, including looking for `su`, root-management or root-hiding apps, dangerous properties, test-build keys, and writable system paths. Two more root checks are performed afterward, and if any of these checks succeeds, detected is set to `true`. The final value is returned to Flutter through `result.success(detected)`. The other `runprogX` methods follow the same pattern, performing checks for conditions such as emulator detection and debugging, and returning the result to Flutter.
 
-In short, the Android implementation receives a runprogX method name from Flutter, runs the corresponding native checks, and returns a boolean indicating whether the condition was detected.
+In short, the Android implementation receives a `runprogX` method name from Flutter, runs the corresponding native checks, and returns a boolean indicating whether the condition was detected.
 
 ## Two solutions
 With this understanding of the plugin, there are two independent paths to bypass the check and recover the flag, mirroring the two techniques introduced in earlier challenges:
-- Solution 1: hook the platform (Java) code inside the target APK with Frida, same technique used in [chall5](../../chall5/solution/solution.md).
-- Solution 2: unpack the Dart AOT snapshot with Blutter and hook the native Dart machine code directly, same technique used in [chall2](../../chall2/solution/solution.md), [chall3](../../chall3/solution/solution.md) and [chall4](../../chall4/solution/solution.md).
+- **Solution 1**: hook the platform (Java) code inside the target APK with Frida, same technique used in [chall5](../../chall5/solution/solution.md).
+- **Solution 2**: unpack the Dart AOT snapshot with Blutter and hook the native Dart machine code directly, same technique used in [chall2](../../chall2/solution/solution.md), [chall3](../../chall3/solution/solution.md) and [chall4](../../chall4/solution/solution.md).
 
 Both are shown below, and both recover the same flag.
 
@@ -223,7 +223,7 @@ Both are shown below, and both recover the same flag.
 Opening the app in `jadx-gui` and searching for the plugin's channel name confirms the application statically links against `rjsniffer`, exactly as expected.
 ![alt text](./_images/chall9_2.png)
 
-Since the plugin's `MethodCallHandler` dispatches on `runprogX` strings, searching for that literal leads straight to the dispatcher method. The result of each check is delivered as `Boolean.valueOf(z)` through a callback object. Every branch, regardless of which `runprogX` was called, funnels its boolean value through the same sink: `c0100l.m540d(Boolean.valueOf(...))`.
+Since the plugin's `MethodCallHandler` dispatches on `runprogX` strings, searching for that literal leads straight to the dispatcher method. The result of each check is delivered as `Boolean.valueOf(z)` through a callback object. Every branch, regardless of which `runprogX` was called, funnels its boolean value through the same sink `c0100l.m540d(Boolean.valueOf(...))`.
 
 **File:** `com.emrys.rjsniffer.rjsniffer.C0191a`
 ```java
@@ -596,7 +596,9 @@ The root check in this app, `_checkRoot()` in the Flutter widget's `initState()`
   ...
 ```
 
+
 **First attempt: hooking ReturnAsyncStub**
+
 A first, naive approach is to hook `ReturnAsyncStub` itself, the shared stub every async Dart function funnels through when completing its `Future`, and blindly force its return value to Dart's boxed `false`.
 
 If the Frida script is not attached and its hooks are not installed before that single call occurs, there is no second opportunity and the check executes without being intercepted. This is why this style of hooking can appear inherently non-deterministic: sometimes it works, and sometimes it does not. The outcome depends on a race between two independent timelines: how quickly the polling loop detects that `libapp.so` has been mapped into memory, and how quickly Flutter's startup sequence reaches and executes `_checkRoot()`.
@@ -719,6 +721,8 @@ This works, but `ReturnAsyncStub` is a blunt instrument. It is a shared trampoli
 It happens to work in this challenge because little else runs before the flag is displayed, but in a more complex application it could cause crashes or unexpected behavior. The better approach is to identify the async completion path for `amICompromised()` and modify only its result, rather than hooking the global `ReturnAsyncStub`.
 
 **A more targeted approach**
+
+
 A safer strategy is to hook the specific instruction addresses immediately after each await `Rjsniffer.amIXXX()` resumes inside the application's own `_HomePageState._checkRoot()`, instead of the underlying async execution flow. At each of those addresses, `x0` holds exactly the resolved value of that specific call, and nothing else. 
 
 **File:** `output/asm/chall9/main.dart`
